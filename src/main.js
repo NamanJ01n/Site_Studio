@@ -118,7 +118,7 @@ function makeModel(o) {
         g.add(cube(0.4, 0.05, 0.4, o.color, tx + dx, 0.42, dz), cube(bw, 0.4, bd, o.color, tx + dx + bx, 0.47, dz + bz), cyl(0.05, 0.05, 0.4, '#444', tx + dx, 0, dz));
       });
     });
-    g.scale.y = o.h / 2.5;
+    g.scale.set(w / 5, o.h / 2.5, d / 3);
   } else {                                                  // cafe: body, overhanging roof, red awning, windows and door on the front
     g.add(cube(w, o.h, d, o.color, 0, 0, 0), cube(w + 0.8, 0.3, d + 0.8, '#6d4c41', 0, o.h, 0), cube(w * 0.6, 0.15, 1.2, '#c0392b', 0, o.h * 0.6, d / 2 + 0.6),
       cube(w * 0.18, o.h * 0.3, 0.1, '#9fd3f2', -w * 0.3, o.h * 0.35, d / 2 + 0.05), cube(w * 0.18, o.h * 0.3, 0.1, '#9fd3f2', w * 0.3, o.h * 0.35, d / 2 + 0.05),
@@ -153,7 +153,7 @@ function label(text, x, y, z) {
   const sp = new THREE.Sprite(mat); sp.scale.set(32 * k, 6 * k, 1); sp.position.set(x, y + 4 * k, z); return sp;
 }
 const disposeObj = (m) => m.traverse((c) => { if (c.geometry) c.geometry.dispose(); [].concat(c.material || []).forEach((x) => { if (!x.userData.shared) x.dispose(); }); });
-const sigOf = (o) => [o.kind, o.h, o.color, o.flagged ? 1 : 0, o.id === selectedId ? 1 : 0, o.poly.length, o.poly[0][0], o.poly[0][1], o.poly[1][0]].join('|');
+const sigOf = (o) => [o.kind, o.h, o.color, o.flagged ? 1 : 0, o.id === selectedId ? 1 : 0, o.poly.length, o.poly[0][0], o.poly[0][1], o.poly[1][0], o.poly[2][1]].join('|');
 function rebuild() {   // only objects whose look changed get a new mesh; the rest are reused
   group.clear(); labelGroup.clear(); let nl = 0;
   if (selHelper) { selHelper.geometry.dispose(); selHelper.material.dispose(); selHelper = null; }
@@ -171,7 +171,7 @@ function rebuild() {   // only objects whose look changed get a new mesh; the re
   const s = objects.find((o) => o.id === selectedId);
   $('sel').textContent = s ? `#${s.id} ${s.kind} ${s.name}` : 'Nothing selected';
   $('src').textContent = s ? `Height ${s.h.toFixed(1)} m: ${SRC_TEXT[s.src]}` : '';
-  if (s) { $('hgt').value = s.h; $('col').value = s.color; $('hex').value = s.color; }
+  if (s) { $('hgt').value = s.h; $('col').value = s.color; $('hex').value = s.color; const [L, W] = dims(s); $('len').value = +L.toFixed(1); $('wid').value = +W.toFixed(1); $('len').disabled = $('wid').disabled = s.kind === 'tree'; }
 }
 
 // ================= loading =================
@@ -321,6 +321,27 @@ function rotate(deg) {   // spin the selected object around its own centre (work
   const cx = s.poly.reduce((t, p) => t + p[0], 0) / m, cz = s.poly.reduce((t, p) => t + p[1], 0) / m;
   s.poly = s.poly.map(([x, z]) => [cx + (x - cx) * c - (z - cz) * n, cz + (x - cx) * n + (z - cz) * c]); recheck();
 }
+// ---- length / width: scale the footprint along the object's own axes (the first edge defines "length") ----
+function frameOf(o) {
+  const p = o.poly, n = p.length, a = Math.atan2(p[1][1] - p[0][1], p[1][0] - p[0][0]);
+  return { cx: p.reduce((t, q) => t + q[0], 0) / n, cz: p.reduce((t, q) => t + q[1], 0) / n, c: Math.cos(a), sn: Math.sin(a) };
+}
+function dims(o) {   // current length and width in metres
+  const f = frameOf(o); let u0 = 1e9, u1 = -1e9, v0 = 1e9, v1 = -1e9;
+  o.poly.forEach(([x, z]) => { const dx = x - f.cx, dz = z - f.cz, u = dx * f.c + dz * f.sn, v = -dx * f.sn + dz * f.c; u0 = Math.min(u0, u); u1 = Math.max(u1, u); v0 = Math.min(v0, v); v1 = Math.max(v1, v); });
+  return [u1 - u0, v1 - v0];
+}
+function resizeSelected(newL, newW) {   // pass 0 for the side that should stay as it is
+  const s = sel(); if (!s) return; const [L, W] = dims(s), f = frameOf(s);
+  const ku = newL && L > 0.01 ? newL / L : 1, kv = newW && W > 0.01 ? newW / W : 1;
+  s.poly = s.poly.map(([x, z]) => {
+    const dx = x - f.cx, dz = z - f.cz, u = (dx * f.c + dz * f.sn) * ku, v = (-dx * f.sn + dz * f.c) * kv;
+    return [f.cx + u * f.c - v * f.sn, f.cz + u * f.sn + v * f.c];
+  });
+  recheck();
+}
+$('len').onchange = () => { const v = +$('len').value; if (v >= 0.5) resizeSelected(v, 0); };
+$('wid').onchange = () => { const v = +$('wid').value; if (v >= 0.5) resizeSelected(0, v); };
 const stepDeg = () => +$('step').value || 15;
 $('rl').onclick = () => rotate(-stepDeg()); $('rr').onclick = () => rotate(stepDeg());
 addEventListener('keydown', (e) => { if (e.target.tagName === 'INPUT') return; if (e.key === 'q') rotate(-stepDeg()); if (e.key === 'e') rotate(stepDeg()); if (e.key === 'Escape') setTool('orbit'); });
