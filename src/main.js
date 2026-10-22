@@ -190,16 +190,25 @@ $('go').onclick = async () => {
   const ring = verts.map((p) => `${p.lat} ${p.lng}`).join(' ');
   const q = `[out:json][timeout:120][maxsize:536870912];(way["building"](poly:"${ring}");way["highway"](poly:"${ring}");way["amenity"="parking"](poly:"${ring}");way["aeroway"~"runway|taxiway|apron"](poly:"${ring}");way["leisure"~"park|garden|pitch|playground"](poly:"${ring}");way["landuse"~"grass|forest|recreation_ground"](poly:"${ring}");way["natural"~"water|wood"](poly:"${ring}");way["waterway"~"river|stream|canal"](poly:"${ring}"););out geom;`;
   try {
-    const list = parse(await overpass(q));
+    $('go').disabled = true; let list; try { list = parse(await overpass(q)); } finally { $('go').disabled = false; }
     $('status').textContent = `${list.length} buildings, ${flats.length} roads/green/water features.` + (list.length ? '' : '\nNo buildings mapped here: use "Trace footprint".');
     show(list, Math.max(wm, hm) / 2); $('pmsg').textContent = '';
   } catch (err) { $('pmsg').textContent = 'Download failed: ' + err.message + ' (Overpass may be busy: wait a minute and retry).'; }
 };
-async function overpass(q) {   // tries a second public server if the first fails
-  for (const url of ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter']) {
-    try { const r = await fetch(url, { method: 'POST', body: 'data=' + encodeURIComponent(q) }); if (r.ok) return (await r.json()).elements; } catch (e) { /* try next server */ }
+const OVERPASS = ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter', 'https://overpass.private.coffee/api/interpreter'];
+const queryCache = new Map();   // the same area is never downloaded twice in one session
+async function overpass(q) {    // tries three public servers, and waits and retries when they are busy
+  if (queryCache.has(q)) return queryCache.get(q);
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    for (const url of OVERPASS) {
+      try {
+        const r = await fetch(url, { method: 'POST', body: 'data=' + encodeURIComponent(q) });
+        if (r.ok) { const els = (await r.json()).elements; queryCache.set(q, els); return els; }
+      } catch (e) { /* busy or network error: try the next server */ }
+    }
+    if (attempt < 4) for (let sec = attempt * 8; sec > 0; sec--) { $('pmsg').textContent = `Map server is busy. Retrying in ${sec}s (attempt ${attempt + 1} of 4)...`; await new Promise((res) => setTimeout(res, 1000)); }
   }
-  throw new Error('all Overpass servers failed or timed out. Try a smaller area');
+  throw new Error('the free map servers are busy');
 }
 // point-in-polygon: keep only buildings whose centre is inside the drawn area
 const inArea = (lat, lon) => { let c = false; for (let i = 0, j = verts.length - 1; i < verts.length; j = i++) { const a = verts[i], b = verts[j]; if ((a.lng > lon) !== (b.lng > lon) && lat < (b.lat - a.lat) * (lon - a.lng) / (b.lng - a.lng) + a.lat) c = !c; } return c; };
